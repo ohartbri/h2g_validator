@@ -8,6 +8,8 @@ import binascii
 
 import pandas as pd
 
+_print_stuff = True
+
 def print_ba(ba: bytearray) -> None:
     for i in range(0, len(ba), 8):
         chunk = ba[i:i+8]
@@ -95,8 +97,8 @@ class h2g_validator:
 
     def parse_header(self, header: bytearray) -> None:
         udp_tx_counter = int.from_bytes(header[0:4], byteorder='big')
-        fpga_ip = header[5]
-        fpga_port = header[6]
+        fpga_ip = header[4]
+        fpga_port = header[5]
         
         if _print_stuff:
             print(f"UDP TX Counter: {udp_tx_counter}")
@@ -118,22 +120,23 @@ class h2g_validator:
 
         magic_header = payload[0:2]
         if not ((magic_header == b'\xAA\x5A') or (magic_header == b'\x00\x00')):
-            print()
-            print("Invalid magic header in payload ", ipayload, " ", magic_header, ' packet: ', self._packet_count, ' data pointer: ', self._datapointer)
-            
-            print()
-            print("pre-payload:")
-            self._f.seek(self._datapointer+14+ipayload*192 - 32)
-            print_ba(self._f.read(32))
-            print("payload:")
-            print_ba(payload)
-            print("post-payload:")
-            self._f.seek(self._datapointer+14+(ipayload+1)*192)
-            print_ba(self._f.read(32))
             if self._interactive:
+                print()
+                print("Invalid magic header in payload ", ipayload, " ", magic_header, ' packet: ', self._packet_count, ' data pointer: ', self._datapointer)
+                
+                print()
+                print("pre-payload:")
+                self._f.seek(self._datapointer+14+ipayload*192 - 32)
+                print_ba(self._f.read(32))
+                print("payload:")
+                print_ba(payload)
+                print("post-payload:")
+                self._f.seek(self._datapointer+14+(ipayload+1)*192)
+                print_ba(self._f.read(32))
+                
                 _ = input("Press Enter to continue...")
             else:
-                sys.exit(1)
+                return #sys.exit(1)
         fpga_id = payload[2] >> 4
         asic_id = payload[2] & 0xF
         payload_type = payload[3]
