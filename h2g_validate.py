@@ -41,7 +41,7 @@ class h2g_validator:
     _global_dict = {'packet_count': 0, 'packet_count_ip': {208: 0, 209: 0}, 'aa5a_failures_ip': {208: 0, 209: 0}}
 
     _header_dict = {'packet_number': [], 'fpga_ip': [], 'fpga_port': [], 'udp_tx_counter': [], 'data_pointer': [], 'payloads_valid': [], 'first_aa5a_position': [],'h1_count': [], 'h2_count': [], 'h3_count': [], 'crc_count': []}
-    _payload_dict = {'packet_number': [], 'payload_number': [], 'magic_header': [], 'fpga_id': [], 'asic_id': [], 'payload_type': [],
+    _payload_dict = {'packet_number': [], 'payload_number': [], 'magic_header': [], 'payload_valid': [], 'aa5a_position': [], 'fpga_id': [], 'asic_id': [], 'payload_type': [],
                      'trigger_in_cnt': [],'trigger_out_cnt': [], 'event_cnt': [], 'timestamp': [], 'data_h3': [], 'data_h2': [], 'data_h1': [], 'data_crc': []}
 
     _df_header = None
@@ -67,7 +67,7 @@ class h2g_validator:
     def validate_h2g_file(self) -> None:
         print("Starting H2G file validation...")
         print('      ', end='', flush=True)
-        chunk_size = 10 * 1024 * 1024  # 10 MB
+        chunk_size = 100 * 1024 * 1024  # 10 MB
         while True:
             if (self._packet_max) and (self._global_dict['packet_count'] >= self._packet_max):
                 print(f"\nReached maximum packet limit of {self._packet_max}. Stopping processing.")
@@ -81,6 +81,9 @@ class h2g_validator:
                 break
             
             # Process multiple packets from chunk
+            if len(chunk) < self._packet_size:
+                print(f"\nRemaining chunk size {len(chunk)} bytes is smaller than packet size {self._packet_size} bytes. Stopping processing.")
+                break
             for i in range(0, len(chunk) - self._packet_size + 1, self._packet_size):
                 
                 packet = chunk[i:i+self._packet_size]
