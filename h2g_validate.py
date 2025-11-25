@@ -67,46 +67,44 @@ class h2g_validator:
     def validate_h2g_file(self) -> None:
         print("Starting H2G file validation...")
         print('      ', end='', flush=True)
+        chunk_size = 10 * 1024 * 1024  # 10 MB
         while True:
-            if self._global_dict['packet_count'] == self._packet_max:
+            if (self._packet_max) and (self._global_dict['packet_count'] >= self._packet_max):
                 print(f"\nReached maximum packet limit of {self._packet_max}. Stopping processing.")
                 break
 
-            if self._global_dict['packet_count'] % 10000 == 0:
-                print(f'\b\b\b\b\b\b{100*self._datapointer/self._f_size:5.2f}%', flush=True, end ='')
+            print(f'\b\b\b\b\b\b{100*self._datapointer/self._f_size:5.2f}%', flush=True, end ='')
             self._f.seek(self._datapointer)
-            packet = bytearray(self._f.read(self._packet_size))
-            
-
-            if not packet:
+            chunk = self._f.read(chunk_size)
+            if not chunk:
                 print(f"End of file reached.")
                 break
-            if len(packet) != self._packet_size:
-                print(f"Invalid chunk size at end of file: {len(packet)} bytes (expected {self._packet_size} bytes)")
-                break
-
-            header_content, payload_contents = self.parse_packet(bytearray(packet))
-
-            header_content['packet_number'] = self._global_dict['packet_count']
-            for payload in payload_contents:
-                payload['packet_number'] = self._global_dict['packet_count']
             
+            # Process multiple packets from chunk
+            for i in range(0, len(chunk) - self._packet_size + 1, self._packet_size):
+                
+                packet = chunk[i:i+self._packet_size]
+                header_content, payload_contents = self.parse_packet(bytearray(packet))
 
+                header_content['packet_number'] = self._global_dict['packet_count']
+                for payload in payload_contents:
+                    payload['packet_number'] = self._global_dict['packet_count']
+                
 
-            self._global_dict['packet_count'] += 1
-            self._global_dict['packet_count_ip'][header_content['fpga_ip']] += 1
-            if header_content['first_aa5a_position'] != 0:
-                self._global_dict['aa5a_failures_ip'][header_content['fpga_ip']] += 1
+                self._global_dict['packet_count'] += 1
+                self._global_dict['packet_count_ip'][header_content['fpga_ip']] += 1
+                if header_content['first_aa5a_position'] != 0:
+                    self._global_dict['aa5a_failures_ip'][header_content['fpga_ip']] += 1
 
-            self._datapointer += self._packet_size
+                self._datapointer += self._packet_size
 
-            if self._pandas:
-                for key, value in header_content.items():
-                    self._header_dict[key].append(value)
-            if self._pandas_payloads:   
-                for payload_content in payload_contents:
-                    for key, value in payload_content.items():
-                        self._payload_dict[key].append(value)
+                if self._pandas:
+                    for key, value in header_content.items():
+                        self._header_dict[key].append(value)
+                if self._pandas_payloads:   
+                    for payload_content in payload_contents:
+                        for key, value in payload_content.items():
+                            self._payload_dict[key].append(value)
 
 
         
@@ -178,6 +176,7 @@ class h2g_validator:
 
         header_content = self.parse_header(header)
         header_content['first_aa5a_position'] = payload_contents[0]['aa5a_position']
+        
         # n_payloads_valid is either sum of non-padding payloads valid or -1 if any payload is invalid
         n_payloads_valid = sum([payload_content['payload_valid'] for payload_content in payload_contents]) if -1 not in [payload_content['payload_valid'] for payload_content in payload_contents] else -1
         header_content['payloads_valid'] = sum([payload_content['payload_valid'] for payload_content in payload_contents])
@@ -306,12 +305,15 @@ if __name__ == "__main__":
                         args.skip_lines)
 
     r = val.validate_h2g_file()
+    print('packets total:')
     print(r['packet_count'])
-    print(r['packet_count_ip'][208], r['packet_count_ip'][209])
-    print(r['aa5a_failures_ip'][208], r['aa5a_failures_ip'][209])
+    print(f'packets by ip:')
+    print(f'{208:8d}\t{209:8d}')
+    print(f"{r['packet_count_ip'][208]:8d}\t{r['packet_count_ip'][209]:8d}")
+    print(f"{r['aa5a_failures_ip'][208]:8d}\t{r['aa5a_failures_ip'][209]:8d}")
+    print(f"{r['aa5a_failures_ip'][208]/r['packet_count_ip'][208]*100:8.2f}%\t{r['aa5a_failures_ip'][209]/r['packet_count_ip'][209]*100:8.2f}%")
 
     #    _global_dict = {'packet_count': 0, 'packet_count_ip': {208: 0, 209: 0}, 'aa5a_failures_ip': {208: 0, 209: 0}}
 
     sys.exit(0)
 
-        
