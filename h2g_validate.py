@@ -92,9 +92,13 @@ class h2g_validator:
                 
 
                 self._global_dict['packet_count'] += 1
-                self._global_dict['packet_count_ip'][header_content['fpga_ip']] += 1
+                this_fpga_ip = header_content['fpga_ip']
+                if this_fpga_ip not in self._global_dict['packet_count_ip']:
+                    self._global_dict['packet_count_ip'][this_fpga_ip] = 0
+                    self._global_dict['aa5a_failures_ip'][this_fpga_ip] = 0
+                self._global_dict['packet_count_ip'][this_fpga_ip] += 1
                 if header_content['first_aa5a_position'] != 0:
-                    self._global_dict['aa5a_failures_ip'][header_content['fpga_ip']] += 1
+                    self._global_dict['aa5a_failures_ip'][this_fpga_ip] += 1
 
                 self._datapointer += self._packet_size
 
@@ -305,13 +309,16 @@ if __name__ == "__main__":
                         args.skip_lines)
 
     r = val.validate_h2g_file()
+
+    ips_seen = [ip for ip, count in r['packet_count_ip'].items() if count > 0]
+
     print('packets total:')
     print(r['packet_count'])
     print(f'packets by ip:')
-    print(f'{208:8d}\t{209:8d}')
-    print(f"{r['packet_count_ip'][208]:8d}\t{r['packet_count_ip'][209]:8d}")
-    print(f"{r['aa5a_failures_ip'][208]:8d}\t{r['aa5a_failures_ip'][209]:8d}")
-    print(f"{r['aa5a_failures_ip'][208]/r['packet_count_ip'][208]*100:8.2f}%\t{r['aa5a_failures_ip'][209]/r['packet_count_ip'][209]*100:8.2f}%")
+    print(''.join([f'{ip:8d}\t' for ip in ips_seen]))
+    print(''.join([f"{r['packet_count_ip'][ip]:8d}\t" for ip in ips_seen]))
+    print(''.join([f"{r['aa5a_failures_ip'][ip]:8d}\t" for ip in ips_seen]))
+    print(''.join([f"{np.float64(r['aa5a_failures_ip'][ip])/r['packet_count_ip'][ip]*100:8.2f}%\t" for ip in ips_seen]))
 
     #    _global_dict = {'packet_count': 0, 'packet_count_ip': {208: 0, 209: 0}, 'aa5a_failures_ip': {208: 0, 209: 0}}
 
