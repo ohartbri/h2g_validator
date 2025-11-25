@@ -142,13 +142,15 @@ class h2g_validator:
     def validate_h2g_file(self) -> None:
         print("Starting H2G file validation...")
         print('      ', end='', flush=True)
-        chunk_size = 10 * 1024 * 1024  # 10 MB
+        chunk_size = 100 * 1024 * 1024  # 100 MB
+        progress_counter = 0
         while True:
             if (self._packet_max) and (self._global_dict['packet_count'] >= self._packet_max):
                 print(f"\nReached maximum packet limit of {self._packet_max}. Stopping processing.")
                 break
 
             print(f'\b\b\b\b\b\b{100*self._datapointer/self._f_size:5.2f}%', flush=True, end ='')
+            
             self._f.seek(self._datapointer)
             chunk = self._f.read(chunk_size)
             if not chunk:
@@ -157,12 +159,8 @@ class h2g_validator:
             
             # Process multiple packets from chunk
             for i in range(0, len(chunk) - self._packet_size + 1, self._packet_size):
-                
                 packet = chunk[i:i+self._packet_size]
-                self.parse_packet(bytearray(packet))
-
-                
-                
+                self.parse_packet(packet)
 
                 self._global_dict['packet_count'] += 1
                 self._global_dict['packet_count_ip'][self._header_buffer.fpga_ip[self._header_buffer.buffer_pointer-1]] += 1
@@ -203,122 +201,98 @@ class h2g_validator:
 
         return self._global_dict
 
-    def parse_packet(self, packet: bytearray) -> None:
-        header = packet[0:14]
-
+    def parse_packet(self, packet) -> None:
+        # Parse header inline
+        udp_tx_counter = int.from_bytes(packet[0:4], byteorder='big')
+        fpga_ip = packet[4]
+        fpga_port = packet[5]
         
-        payloads = [packet[14+i*192:14+(i+1)*192] for i in range(7)]
-
-        for ipayload, payload in enumerate(payloads):
-            self.parse_payload(payload, ipayload)
-
-        self.parse_header(header)
-        self._header_buffer.first_aa5a_position[self._header_buffer.buffer_pointer] = self._payload_buffer.first_aa5a_position[self._payload_buffer.buffer_pointer] # first payload only
+        hdr_idx = self._header_buffer.buffer_pointer
+        self._header_buffer.udp_tx_counter[hdr_idx] = udp_tx_counter
+        self._header_buffer.fpga_ip[hdr_idx] = fpga_ip
+        self._header_buffer.fpga_port[hdr_idx] = fpga_port
+        self._header_buffer.data_pointer[hdr_idx] = self._datapointer
+        self._header_buffer.packet_number[hdr_idx] = self._global_dict['packet_count']
         
-        # n_payloads_valid is either sum of non-padding payloads valid or -1 if any payload is invalid
-        n_payloads_valid = sum([self._payload_buffer.magic_header[self._payload_buffer.buffer_pointer + ipayload] == 0xAA5A for ipayload in range(7)]) if -1 not in [self._payload_buffer.magic_header[self._payload_buffer.buffer_pointer + ipayload] for ipayload in range(7)] else -1
-        h1_count = sum([self._payload_buffer.data_h1[self._payload_buffer.buffer_pointer + ipayload] for ipayload in range(7)])
-        h2_count = sum([self._payload_buffer.data_h2[self._payload_buffer.buffer_pointer + ipayload] for ipayload in range(7)])
-        h3_count = sum([self._payload_buffer.data_h3[self._payload_buffer.buffer_pointer + ipayload] for ipayload in range(7)])
-        crc_count = sum([self._payload_buffer.data_crc[self._payload_buffer.buffer_pointer + ipayload] for ipayload in range(7)])
-
-        self._header_buffer.payloads_valid[self._header_buffer.buffer_pointer] = n_payloads_valid
-        self._header_buffer.h1_count[self._header_buffer.buffer_pointer] = h1_count
-        self._header_buffer.h2_count[self._header_buffer.buffer_pointer] = h2_count
-        self._header_buffer.h3_count[self._header_buffer.buffer_pointer] = h3_count
-        self._header_buffer.crc_count[self._header_buffer.buffer_pointer] = crc_count
+        # Parse payloads inline without creating slice objects
+        payload_base_idx = self._payload_buffer.buffer_pointer
+        n_payloads_valid = 0
+        h1_count = h2_count = h3_count = crc_count = 0
+        first_aa5a_pos = -1
+        
+        for ipayload in range(7):
+            offset = 14 + ipayload * 192
+            payload_idx = payload_base_idx + ipayload
+            
+            # Parse payload inline
+            if first_aa5a_pos == -1 and ipayload == 0:
+                # Only compute for first payload
+                search_start = offset
+                search_end = offset + 192
+                for j in range(search_start, search_end - 1):
+                    if packet[j] == 0xAA and packet[j+1] == 0x5A:
+                        first_aa5a_pos = j - offset
+                        break
+                if first_aa5a_pos == -1:
+                    first_aa5a_pos = -1
+            
+            magic_header = (packet[offset] << 8) | packet[offset+1]
+            
+            if magic_header == 0xAA5A:
+                n_payloads_valid += 1
+            
+            fpga_id = packet[offset+2] >> 4
+            asic_id = packet[offset+2] & 0xF
+            payload_type = packet[offset+3]
+            trigger_in_cnt = int.from_bytes(packet[offset+4:offset+8], byteorder='big')
+            trigger_out_cnt = int.from_bytes(packet[offset+8:offset+12], byteorder='big')
+            event_cnt = int.from_bytes(packet[offset+12:offset+16], byteorder='big')
+            timestamp = int.from_bytes(packet[offset+16:offset+24], byteorder='big')
+            
+            data_daqh = int.from_bytes(packet[offset+32:offset+36], byteorder='big')
+            data_h3 = (data_daqh >> 4) & 0x1
+            data_h2 = (data_daqh >> 5) & 0x1
+            data_h1 = (data_daqh >> 6) & 0x1
+            
+            h1_count += data_h1
+            h2_count += data_h2
+            h3_count += data_h3
+            
+            # Write to buffer
+            self._payload_buffer.packet_number[payload_idx] = self._global_dict['packet_count']
+            self._payload_buffer.payload_number[payload_idx] = ipayload
+            self._payload_buffer.magic_header[payload_idx] = magic_header
+            self._payload_buffer.first_aa5a_position[payload_idx] = first_aa5a_pos if ipayload == 0 else -1
+            self._payload_buffer.fpga_id[payload_idx] = fpga_id
+            self._payload_buffer.asic_id[payload_idx] = asic_id
+            self._payload_buffer.payload_type[payload_idx] = payload_type
+            self._payload_buffer.trigger_in_cnt[payload_idx] = trigger_in_cnt
+            self._payload_buffer.trigger_out_cnt[payload_idx] = trigger_out_cnt
+            self._payload_buffer.event_cnt[payload_idx] = event_cnt
+            self._payload_buffer.timestamp[payload_idx] = timestamp
+            self._payload_buffer.data_h3[payload_idx] = data_h3
+            self._payload_buffer.data_h2[payload_idx] = data_h2
+            self._payload_buffer.data_h1[payload_idx] = data_h1
+            self._payload_buffer.data_crc[payload_idx] = 0
+        
+        # Store aggregated header info
+        self._header_buffer.first_aa5a_position[hdr_idx] = first_aa5a_pos
+        self._header_buffer.payloads_valid[hdr_idx] = n_payloads_valid
+        self._header_buffer.h1_count[hdr_idx] = h1_count
+        self._header_buffer.h2_count[hdr_idx] = h2_count
+        self._header_buffer.h3_count[hdr_idx] = h3_count
+        self._header_buffer.crc_count[hdr_idx] = crc_count
 
         self._header_buffer.buffer_pointer += 1
         self._payload_buffer.buffer_pointer += 7
 
     def parse_header(self, header: bytearray) -> {}:
-        udp_tx_counter = int.from_bytes(header[0:4], byteorder='big')
-        fpga_ip = header[4]
-        fpga_port = header[5]
-
-        self._header_buffer.udp_tx_counter[self._header_buffer.buffer_pointer] = udp_tx_counter
-        self._header_buffer.fpga_ip[self._header_buffer.buffer_pointer] = fpga_ip
-        self._header_buffer.fpga_port[self._header_buffer.buffer_pointer] = fpga_port
-        self._header_buffer.data_pointer[self._header_buffer.buffer_pointer] = self._datapointer
-        self._header_buffer.packet_number[self._header_buffer.buffer_pointer] = self._global_dict['packet_count']
-        
+        # This method is no longer used - parsing is done inline in parse_packet
+        pass
 
     def parse_payload(self, payload: bytearray, ipayload: int) -> {}:
-        first_aa5a_position = payload.find(b'\xAA\x5A')
-
-        magic_header = payload[0:2]
-
-        allowed_magic_headers = [b'\xAA\x5A', b'\x00\x00'] if ipayload > 0 else [b'\xAA\x5A']
-
-        if not (magic_header in allowed_magic_headers):
-            if self._interactive:
-                print()
-                print("Invalid magic header in payload ", ipayload, " ", magic_header, ' packet: ', self._global_dict['packet_count'], ' data pointer: ', self._datapointer)
-                
-                # print()
-                # print("pre-payload:")
-                # self._datapointer -= self._packet_size
-                # self._f.seek(self._datapointer+14+ipayload*192 - 32)
-                # print_ba(self._f.read(32))
-                # print("payload:")
-                # print_ba(self._f.read(192))
-                # print("post-payload:")
-                # self._f.seek(self._datapointer+14+(ipayload+1)*192)
-                # print_ba(self._f.read(32))
-
-                # self._datapointer += self._packet_size
-                
-                print()
-                print()
-                print("pre-payload:")
-                self._f.seek(self._datapointer+14+ipayload*192 - 32)
-                print_ba(self._f.read(32))
-                print("payload:")
-                print_ba(payload)
-                print("post-payload:")
-                self._f.seek(self._datapointer+14+(ipayload+1)*192)
-                print_ba(self._f.read(32))
-                
-                _ = input("Press Enter to continue...")
-
-        if magic_header == b'\xAA\x5A':
-            payload_valid = 1
-        elif magic_header == b'\x00\x00':
-            payload_valid = 0
-        else:
-            payload_valid= -1
-
-
-        fpga_id = payload[2] >> 4
-        asic_id = payload[2] & 0xF
-        payload_type = payload[3]
-        trigger_in_cnt = int.from_bytes(payload[4:8], byteorder='big')
-        trigger_out_cnt = int.from_bytes(payload[8:12], byteorder='big')
-        event_cnt = int.from_bytes(payload[12:16], byteorder='big')
-        timestamp = int.from_bytes(payload[16:24], byteorder='big')
-        reserved = payload[24:32]
-        data = payload[32:192]
-
-        data_daqh = int.from_bytes(data[0:4], byteorder='big')
-        data_h3 = data_daqh >> 4 & 0x1
-        data_h2 = data_daqh >> 5 & 0x1
-        data_h1 = data_daqh >> 6 & 0x1
-
-        self._payload_buffer.packet_number[self._payload_buffer.buffer_pointer + ipayload] = self._global_dict['packet_count']
-        self._payload_buffer.payload_number[self._payload_buffer.buffer_pointer + ipayload] = ipayload
-        self._payload_buffer.magic_header[self._payload_buffer.buffer_pointer + ipayload] = int.from_bytes(magic_header, byteorder='big')
-        self._payload_buffer.first_aa5a_position[self._payload_buffer.buffer_pointer + ipayload] = first_aa5a_position
-        self._payload_buffer.fpga_id[self._payload_buffer.buffer_pointer + ipayload] = fpga_id
-        self._payload_buffer.asic_id[self._payload_buffer.buffer_pointer + ipayload] = asic_id
-        self._payload_buffer.payload_type[self._payload_buffer.buffer_pointer + ipayload] = payload_type
-        self._payload_buffer.trigger_in_cnt[self._payload_buffer.buffer_pointer + ipayload] = trigger_in_cnt
-        self._payload_buffer.trigger_out_cnt[self._payload_buffer.buffer_pointer + ipayload] = trigger_out_cnt
-        self._payload_buffer.event_cnt[self._payload_buffer.buffer_pointer + ipayload] = event_cnt
-        self._payload_buffer.timestamp[self._payload_buffer.buffer_pointer + ipayload] = timestamp
-        self._payload_buffer.data_h3[self._payload_buffer.buffer_pointer + ipayload] = data_h3
-        self._payload_buffer.data_h2[self._payload_buffer.buffer_pointer + ipayload] = data_h2
-        self._payload_buffer.data_h1[self._payload_buffer.buffer_pointer + ipayload] = data_h1
-        self._payload_buffer.data_crc[self._payload_buffer.buffer_pointer + ipayload] = 0  # Placeholder for CRC check result
+        # This method is no longer used - parsing is done inline in parse_packet
+        pass
 
 
     
