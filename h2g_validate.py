@@ -11,6 +11,8 @@ import numpy as np
 
 import crcmod
 
+import struct
+
 _print_stuff = True
 
 def print_ba(ba: bytearray) -> None:
@@ -203,10 +205,9 @@ class h2g_validator:
 
     def parse_packet(self, packet) -> None:
         # Parse header inline
-        udp_tx_counter = int.from_bytes(packet[0:4], byteorder='big')
-        fpga_ip = packet[4]
-        fpga_port = packet[5]
-        
+        # replace from_bytes with struct unpack for speed
+        udp_tx_counter, fpga_ip, fpga_port = struct.unpack('>IBB', packet[0:6])
+
         hdr_idx = self._header_buffer.buffer_pointer
         self._header_buffer.udp_tx_counter[hdr_idx] = udp_tx_counter
         self._header_buffer.fpga_ip[hdr_idx] = fpga_ip
@@ -241,13 +242,16 @@ class h2g_validator:
             if magic_header == 0xAA5A:
                 n_payloads_valid += 1
             
+            fpga_asic_id, payload_type, trigger_in_cnt, trigger_out_cnt, event_cnt, timestamp = struct.unpack('>BBIIIQ', packet[offset+2:offset+24])
+
             fpga_id = packet[offset+2] >> 4
             asic_id = packet[offset+2] & 0xF
-            payload_type = packet[offset+3]
-            trigger_in_cnt = int.from_bytes(packet[offset+4:offset+8], byteorder='big')
-            trigger_out_cnt = int.from_bytes(packet[offset+8:offset+12], byteorder='big')
-            event_cnt = int.from_bytes(packet[offset+12:offset+16], byteorder='big')
-            timestamp = int.from_bytes(packet[offset+16:offset+24], byteorder='big')
+
+            # payload_type = packet[offset+3]
+            # trigger_in_cnt = int.from_bytes(packet[offset+4:offset+8], byteorder='big')
+            # trigger_out_cnt = int.from_bytes(packet[offset+8:offset+12], byteorder='big')
+            # event_cnt = int.from_bytes(packet[offset+12:offset+16], byteorder='big')
+            # timestamp = int.from_bytes(packet[offset+16:offset+24], byteorder='big')
             
             data_daqh = int.from_bytes(packet[offset+32:offset+36], byteorder='big')
             data_h3 = (data_daqh >> 4) & 0x1
