@@ -9,6 +9,8 @@ import binascii
 import pandas as pd
 import numpy as np
 
+import struct
+
 import crcmod
 
 _print_stuff = True
@@ -197,9 +199,11 @@ class h2g_validator:
         return header_content, payload_contents
 
     def parse_header(self, header: bytearray) -> {}:
-        udp_tx_counter = int.from_bytes(header[0:4], byteorder='big')
-        fpga_ip = header[4]
-        fpga_port = header[5]
+        #use struct to unpack header:
+        udp_tx_counter, fpga_ip, fpga_port = struct.unpack('>IBB', header[0:6])
+        # udp_tx_counter = int.from_bytes(header[0:4], byteorder='big')
+        # fpga_ip = header[4]
+        # fpga_port = header[5]
 
         return {'udp_tx_counter': udp_tx_counter,
                 'fpga_ip': fpga_ip,
@@ -252,6 +256,56 @@ class h2g_validator:
             payload_valid= -1
 
 
+        #replace with struct unpacking
+        if payload_valid == 1:
+            fpga_asic_id, payload_type , trigger_in_cnt, trigger_out_cnt, event_cnt, timestamp = struct.unpack('>BBIIIQ', payload[2:24])
+            
+            fpga_id = fpga_asic_id >> 4
+            asic_id = fpga_asic_id & 0xF
+
+            # fpga_asic_id, payload_type = struct.unpack('>BB', payload[2:4])
+            # trigger_in_cnt, trigger_out_cnt, event_cnt = struct.unpack('>III', payload[4:16])
+            # timestamp = struct.unpack('>Q', payload[16:24])[0]
+
+            # fpga_id = payload[2] >> 4
+            # asic_id = payload[2] & 0xF
+            # payload_type = payload[3]
+            # trigger_in_cnt = int.from_bytes(payload[4:8], byteorder='big')
+            # trigger_out_cnt = int.from_bytes(payload[8:12], byteorder='big')
+            # event_cnt = int.from_bytes(payload[12:16], byteorder='big')
+            # timestamp = int.from_bytes(payload[16:24], byteorder='big')
+
+            # this is not needed since it's not accessed later:
+            # reserved = payload[24:32]
+            # data = payload[32:192]
+
+            #data_daqh = int.from_bytes(data[0:4], byteorder='big')
+            data_daqh = int.from_bytes(payload[32:36], byteorder='big')
+            data_h3 = data_daqh >> 4 & 0x1
+            data_h2 = data_daqh >> 5 & 0x1
+            data_h1 = data_daqh >> 6 & 0x1
+
+            data_crc = 0  # Placeholder for CRC check result
+
+            return {'payload_number': ipayload,
+                    'payload_valid': payload_valid,
+                    'magic_header': magic_header,
+                    'aa5a_position': first_aa5a_position,
+                    'fpga_id': fpga_id,
+                    'asic_id': asic_id,
+                    'payload_type': payload_type,
+                    'trigger_in_cnt': trigger_in_cnt,
+                    'trigger_out_cnt': trigger_out_cnt,
+                    'event_cnt': event_cnt,
+                    'timestamp': timestamp,
+                    #'reserved': binascii.hexlify(reserved).decode(),
+                    #'data': data
+                    'data_h3': data_h3,
+                    'data_h2': data_h2,
+                    'data_h1': data_h1,
+                    'data_crc': data_crc,
+                    }
+        
         fpga_id = payload[2] >> 4
         asic_id = payload[2] & 0xF
         payload_type = payload[3]
