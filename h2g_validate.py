@@ -15,15 +15,12 @@ import crcmod
 
 import struct
 
-_print_stuff = True
-
 def print_ba(ba: bytearray) -> None:
     for i in range(0, len(ba), 8):
         chunk = ba[i:i+8]
         print(binascii.hexlify(chunk, ' ', 1).decode())
     print()
 
-_print_stuff = False
 
 class header_buffer_array:
     def __init__(self, estimated_size=0) -> None:
@@ -107,8 +104,6 @@ class h2g_validator:
 
     _packet_max = -1
 
-    # _crc_polynomial = 0x04C11DB7
-    # _crc_func = crcmod.mkCrcFun(_crc_polynomial, initCrc=0x0, rev=False, xorOut=0x0)
 
     # _header_info = {'packet_number': np.array([], dtype=np.uint64), 'fpga_ip': np.array([], dtype=np.uint8), 'fpga_port': np.array([], dtype=np.uint8), 'udp_tx_counter': np.array([], dtype=np.uint32), 'data_pointer': np.array([], dtype=np.uint64)}
     # _payload_info = {'packet_number': np.array([], dtype=np.uint64), 'payload_number': np.array([], dtype=np.uint8), 'magic_header': np.array([], dtype=np.uint16), 'fpga_id': np.array([], dtype=np.uint8), 'asic_id': np.array([], dtype=np.uint8), 'payload_type': np.array([], dtype=np.uint8),
@@ -131,6 +126,11 @@ class h2g_validator:
         self._pandas_payloads = pandas_payloads
         self._packet_max = packet_max
         self._f_size = os.path.getsize(file_path)
+
+        self._crc_polynomial = 0x104C11DB7
+        self._crc_func = crcmod.mkCrcFun(self._crc_polynomial, initCrc=0x0, rev=False, xorOut=0x0)
+
+
         self._f =  open(file_path, "rb")
         
         for _ in range(self._skip_lines):
@@ -146,7 +146,7 @@ class h2g_validator:
     def validate_h2g_file(self) -> None:
         print("Starting H2G file validation...")
         print('      ', end='', flush=True)
-        chunk_size = 10 * 1024 * 1024  # 100 MB
+        chunk_size = 10 * 1024 * 1024  # 10 MB
         progress_counter = 0
         while True:
             if (self._packet_max) and (self._global_dict['packet_count'] >= self._packet_max):
@@ -157,6 +157,7 @@ class h2g_validator:
             
             self._f.seek(self._datapointer)
             chunk = self._f.read(chunk_size)
+            print(type(chunk))
             if not chunk:
                 print(f"End of file reached.")
                 break
@@ -166,6 +167,8 @@ class h2g_validator:
                 print(f"\nRemaining chunk size {len(chunk)} bytes is smaller than packet size {self._packet_size} bytes. Stopping processing.")
                 break
             for i in range(0, len(chunk) - self._packet_size + 1, self._packet_size):
+                # use memoryview or direct slicing to avoid extra copies
+                # packet = memoryview(chunk)[i:i+self._packet_size]
                 packet = chunk[i:i+self._packet_size]
                 self.parse_packet(packet)
 
@@ -266,7 +269,11 @@ class h2g_validator:
             h1_count += data_h1
             h2_count += data_h2
             h3_count += data_h3
-            
+
+            crc_val = self._crc_func(packet[offset+32:offset+192])
+            if crc_val != 0:
+                crc_count += 1
+
             # Write to buffer
             self._payload_buffer.packet_number[payload_idx] = self._global_dict['packet_count']
             self._payload_buffer.payload_number[payload_idx] = ipayload
@@ -282,7 +289,7 @@ class h2g_validator:
             self._payload_buffer.data_h3[payload_idx] = data_h3
             self._payload_buffer.data_h2[payload_idx] = data_h2
             self._payload_buffer.data_h1[payload_idx] = data_h1
-            self._payload_buffer.data_crc[payload_idx] = 0
+            self._payload_buffer.data_crc[payload_idx] = crc_count
         
         # Store aggregated header info
         self._header_buffer.first_aa5a_position[hdr_idx] = first_aa5a_pos
@@ -294,15 +301,6 @@ class h2g_validator:
 
         self._header_buffer.buffer_pointer += 1
         self._payload_buffer.buffer_pointer += 7
-
-    def parse_header(self, header: bytearray) -> {}:
-        # This method is no longer used - parsing is done inline in parse_packet
-        pass
-
-    def parse_payload(self, payload: bytearray, ipayload: int) -> {}:
-        # This method is no longer used - parsing is done inline in parse_packet
-        pass
-
 
     
 
