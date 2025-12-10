@@ -157,7 +157,6 @@ class h2g_validator:
             
             self._f.seek(self._datapointer)
             chunk = self._f.read(chunk_size)
-            print(type(chunk))
             if not chunk:
                 print(f"End of file reached.")
                 break
